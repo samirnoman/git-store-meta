@@ -743,7 +743,9 @@ sub get_cache_header_info_orig {
     $line or return "empty second line";
     chomp($line);
     foreach (split("\t", $line)) {
-        m/^<(.*)>$/ and push(@cache_fields, $1) or return "invalid field '$_' in header line: '$line'";
+        m/^<([a-z]+)>$/ or return "invalid field '$_' in header line: '$line'";
+        grep(/^$1$/, @FIELDS) or return "invalid field name '$_' in header line: '$line'";
+        push(@cache_fields, $1);
     }
 
     # check for existence of "file" and "type" fields
