@@ -110,6 +110,7 @@ my $getfacl;
 my $setfacl;
 
 my $configs;
+my $is_init;
 
 # parse arguments
 my %argv = (
@@ -164,6 +165,8 @@ if (!defined($action)) {
     exit 0;
 }
 
+$is_init = ($action eq 'init') ? 1 : 0;
+
 # init and validate gitdir
 $gitdir = `$GIT rev-parse --git-dir 2>/dev/null`
     or die "error: unknown git repository.\n";
@@ -171,15 +174,10 @@ chomp($gitdir);
 
 my $action0 = $action; # save original action
 
-# handle action: install/init
-if ($action eq "install" or $action eq "init") {
-    print "installing hooks...\n";
+# handle action: install
+if ($action eq "install") {
     install_hooks();
-    if ($action eq "init") {
-      $action = "store";
-    } else {
-      exit 0;
-    }
+    exit 0;
 }
 
 # init and validate topdir
@@ -196,7 +194,20 @@ $git_store_meta_file = rel2abs($git_store_meta_filename);
 $temp_file = catfile($gitdir, $GIT_STORE_META_FILENAME . ".tmp");
 get_cache_header_info();
 
-# handle action: store, update, apply
+if ($is_init) {
+    # check that we do not have staged files
+    my $staged_files = `$GIT diff --name-only --cached -z 2>/dev/null`;
+    my @staged_files = split(/\0/, $staged_files);
+
+    # stop if there are staged files, because we do not want to commit them
+    # we will only commit adding $git_store_meta_file
+    if (@staged_files) {
+        print STDERR "staged files:\n" . join("\n", @staged_files) . "\n" if @staged_files;
+        die "There are staged files\n";
+    }
+}
+
+# handle action: store, update, apply, init
 
 # validate
 if ($action eq "store") {
@@ -332,7 +343,7 @@ print "fields: " . join(", ", @{$argv{'fields'}}) . "\n";
 print "flags: " . $configs . "\n" if $configs;
 
 # do the action
-if ($action eq "store") {
+if ($action eq "store" or $action = "init") {
     if (!$argv{'dry-run'}) {
         make_path(dirname($git_store_meta_file));
         open(GIT_STORE_META_FILE, '>', $git_store_meta_file)
@@ -377,6 +388,33 @@ if ($action eq "store") {
     unlink($temp_file);
 } elsif ($action eq "apply") {
     apply();
+}
+
+if ($is_init) {
+    -f $git_store_meta_file or die "file '$git_store_meta_file' does not exist";
+
+    # run: 
+    #   git add .get_store_meta
+    #   git commit -m 'initialize .git_store_meta'
+    my $cmd;
+    my $file = $git_store_meta_file;
+    # TODO: check that $git_store_meta_file is within the current repo work tree
+    # TODO: check that $git_store_meta_file is not in git repo already
+
+    # change $gist_store_meta_file from absolute to relative path
+    $file = abs2rel($file);
+
+    # ensure_clean_git_tree();
+    my $msg = "initialize with git-store-meta.pl \@$VERSION";
+    $cmd = "$GIT add " . escapeshellarg($file);
+    # TODO: check for errors
+    run_cmd($cmd);
+    $cmd = "$GIT commit -m \"$msg\"";
+    run_cmd($cmd);
+
+    # install hooks after addint and commiting $git_store_meta_file, in order not to fire
+    # pre-commit trigger
+    install_hooks();
 }
 
 # -----------------------------------------------------------------------------
@@ -608,6 +646,7 @@ sub usage {
 }
 
 sub install_hooks {
+    print "installing hooks...\n";
     # Ensure hook files don't exist unless --force
     if (!$argv{'force'}) {
         my $err = '';
@@ -1164,4 +1203,16 @@ sub apply {
 
     # update cached stat information for checked out files
     `$GIT update-index -q --ignore-submodules --ignore-missing --refresh`;
+}
+
+sub run_cmd {
+    my $cmd = shift;
+    if ($argv{'dry-run'}) {
+        print STDERR "DRY-RUN Running: [ $cmd ]\n";
+    } else {
+        # TODO: use open()
+        my $result = `$cmd`;
+        my $err = $?;
+        return $result;
+    }
 }
